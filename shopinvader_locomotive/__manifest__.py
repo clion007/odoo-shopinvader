@@ -4,7 +4,7 @@
 
 {
     "name": "Shopinvader Locomotive CMS Connector",
-    "version": "12.0.1.0.0",
+    "version": "12.0.3.2.1",
     "category": "Connector",
     "summary": "Manage communications between Shopinvader and Locomotive CMS",
     "author": "Akretion",
@@ -13,14 +13,14 @@
     "development_status": "Stable/Production",
     "depends": [
         "connector",
-        "connector_search_engine",
+        "shopinvader_search_engine",
         "queue_job",
         "shopinvader",
+        "base_suspend_security",
     ],
     "data": ["views/shopinvader_backend_view.xml", "data/ir_cron.xml"],
     "demo": ["demo/backend_demo.xml"],
-    "external_dependencies": {"python": ["locomotivecms", "openupgradelib"]},
-    "pre_init_hook": "rename_module",
+    "external_dependencies": {"python": ["locomotivecms"]},
     "installable": True,
     "auto_install": False,
     "application": False,

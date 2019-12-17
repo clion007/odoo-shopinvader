@@ -19,20 +19,6 @@ class AbstractMailService(AbstractComponent):
     def _validator_ask_email(self):
         return {}
 
-    def _is_logged(self):
-        """
-        Check if the current partner is a real partner (not the anonymous one
-        and not empty)
-        :return: bool
-        """
-        logged = False
-        if (
-            self.partner
-            and self.partner != self.shopinvader_backend.anonymous_partner_id
-        ):
-            logged = True
-        return logged
-
     def _get_email_notification_type(self, record):
         """
         Based on the given record, get the notification type.
@@ -88,7 +74,7 @@ class AbstractMailService(AbstractComponent):
         :return: dict
         """
         # Can not ask an email if not logged
-        if not self._is_logged():
+        if not self._is_logged_in():
             return {}
         target = self._load_target_email(_id)
         if not target:

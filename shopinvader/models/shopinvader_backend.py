@@ -2,16 +2,24 @@
 # @author Sébastien BEAU <sebastien.beau@akretion.com>
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 
+from contextlib import contextmanager
+
 from odoo import _, api, fields, models, tools
+from odoo.addons.http_routing.models.ir_http import slugify
 from odoo.addons.server_environment import serv_config
 from odoo.http import request
 
 
 class ShopinvaderBackend(models.Model):
     _name = "shopinvader.backend"
+    _inherit = ["collection.base", "server.env.mixin"]
     _description = "Shopinvader Backend"
 
     name = fields.Char(required=True)
+    tech_name = fields.Char(
+        required=True,
+        help="Unique name for technical purposes. " "Eg: server env keys.",
+    )
     company_id = fields.Many2one(
         "res.company",
         "Company",
@@ -22,15 +30,11 @@ class ShopinvaderBackend(models.Model):
     notification_ids = fields.One2many(
         "shopinvader.notification", "backend_id", "Notification"
     )
-    nbr_product = fields.Integer(compute="_compute_nbr_content")
+    nbr_product = fields.Integer(
+        compute="_compute_nbr_content", string="Number of binded products"
+    )
     nbr_variant = fields.Integer(compute="_compute_nbr_content")
     nbr_category = fields.Integer(compute="_compute_nbr_content")
-    last_step_id = fields.Many2one(
-        "shopinvader.cart.step",
-        string="Last cart step",
-        required=True,
-        default=lambda s: s._default_last_step_id(),
-    )
     allowed_country_ids = fields.Many2many(
         comodel_name="res.country", string="Allowed Country"
     )
@@ -47,11 +51,13 @@ class ShopinvaderBackend(models.Model):
     sequence_id = fields.Many2one(
         "ir.sequence", "Sequence", help="Naming policy for orders and carts"
     )
-    auth_api_key_name = fields.Selection(
-        required=False,  # required into the UI to allow demo data
-        help="The name of the api_key section used for the authentication of"
+    auth_api_key_id = fields.Many2one(
+        "auth.api.key",
+        "Api Key",
+        required=True,
+        help="Api_key section used for the authentication of"
         "calls to services dedicated to this backend",
-        selection=lambda a: a._get_auth_api_key_name_selection(),
+        copy=False,
     )
     lang_ids = fields.Many2many("res.lang", string="Lang", required=True)
     pricelist_id = fields.Many2one("product.pricelist", string="Pricelist")
@@ -80,47 +86,105 @@ class ShopinvaderBackend(models.Model):
         "etc.",
     )
     user_id = fields.Many2one(
-        comodel_name="res.users",
-        compute="_compute_user_id",
+        related="auth_api_key_id.user_id",
+        readonly=True,
         help="The technical user used to process calls to the services "
         "provided by the backend",
     )
     website_public_name = fields.Char(
-        help="Public name of your backend/website."
+        help="Public name of your backend/website.\n"
+        " Used for products name referencing."
+    )
+    clear_cart_options = fields.Selection(
+        selection=[
+            ("delete", "Delete"),
+            ("clear", "Clear"),
+            ("cancel", "Cancel"),
+        ],
+        required=True,
+        string="Clear cart",
+        default="clear",
+        help="Action to execute on the cart when the front want to clear the "
+        "current cart:\n"
+        "- Delete: delete the cart (and items);\n"
+        "- Clear: keep the cart but remove items;\n"
+        "- Cancel: The cart is canceled but kept into the database.\n"
+        "When a quotation is not validated, habitually it's not removed "
+        "but cancelled. "
+        "It could be also useful if you want to keep cart for "
+        "statistics reasons. A new cart is created automatically when the "
+        "customer will add a new item.",
+    )
+    validate_customers = fields.Boolean(
+        default=False,  # let's be explicit here :)
+        help="Turn on this flag to block non validated customers. "
+        "If customers' partners are not validated, "
+        "registered users cannot log in. "
+        "Salesman will get notified via mail activity.",
+    )
+    validate_customers_type = fields.Selection(
+        selection=[
+            ("all", "Companies, simple users and addresses"),
+            ("company", "Company users only"),
+            ("user", "Simple users only"),
+            ("company_and_user", "Companies and simple users"),
+            ("address", "Addresses only"),
+        ],
+        default="all",
+    )
+    salesman_notify_create = fields.Selection(
+        selection=[
+            ("", "None"),
+            ("all", "Companies, simple users and addresses"),
+            ("company", "Company users only"),
+            ("user", "Simple users only"),
+            ("company_and_user", "Companies and simple users"),
+            ("address", "Addresses only"),
+        ],
+        default="company",
+    )
+    salesman_notify_update = fields.Selection(
+        selection=[
+            ("", "None"),
+            ("all", "Companies, simple users and addresses"),
+            ("company", "Company users only"),
+            ("user", "Simple users only"),
+            ("company_and_user", "Companies and simple users"),
+            ("address", "Addresses only"),
+        ],
+        default="",
+    )
+    partner_title_ids = fields.Many2many(
+        "res.partner.title",
+        string="Available partner titles",
+        default=lambda self: self._default_partner_title_ids(),
+    )
+    partner_industry_ids = fields.Many2many(
+        "res.partner.industry",
+        string="Available partner industries",
+        default=lambda self: self._default_partner_industry_ids(),
     )
 
     _sql_constraints = [
         (
-            "auth_api_key_name_uniq",
-            "unique(auth_api_key_name)",
+            "auth_api_key_id_uniq",
+            "unique(auth_api_key_id)",
             "An authentication API Key can be used by only one backend.",
-        )
+        ),
+        ("tech_name_uniq", "unique(tech_name)", "`tech_name` must be unique"),
     ]
 
-    @api.model
-    def _get_auth_api_key_name_selection(self):
-        selection = []
-        for section in serv_config.sections():
-            if section.startswith("api_key_") and serv_config.has_option(
-                section, "key"
-            ):
-                selection.append((section, section))
-        return selection
+    @property
+    def _server_env_fields(self):
+        return {"location": {}}
 
-    @api.depends("auth_api_key_name")
     @api.multi
-    def _compute_user_id(self):
-        for rec in self:
-            section = rec.auth_api_key_name
-            login_name = serv_config.get(section, "user")
-            user_model = self.env["res.users"]
-            if serv_config.has_option(section, "allow_inactive_user"):
-                allow_inactive_user = serv_config.getboolean(
-                    section, "allow_inactive_user"
-                )
-                if allow_inactive_user:
-                    user_model = user_model.with_context(active_test=False)
-            rec.user_id = user_model.search([("login", "=", login_name)])
+    def _server_env_section_name(self):
+        self.ensure_one()
+        if not self.tech_name:
+            return
+        base = self._server_env_global_section_name()
+        return ".".join((base, self.tech_name))
 
     @api.model
     def _default_company_id(self):
@@ -129,13 +193,12 @@ class ShopinvaderBackend(models.Model):
         )
 
     @api.model
-    def _default_last_step_id(self):
-        last_step = self.env["shopinvader.cart.step"].browse()
-        try:
-            last_step = self.env.ref("shopinvader.cart_end")
-        except ValueError:
-            pass
-        return last_step
+    def _default_partner_title_ids(self):
+        return self.env["res.partner.title"].search([])
+
+    @api.model
+    def _default_partner_industry_ids(self):
+        return self.env["res.partner.industry"].search([])
 
     def _to_compute_nbr_content(self):
         """
@@ -300,20 +363,75 @@ class ShopinvaderBackend(models.Model):
         return None
 
     @api.model
-    @tools.ormcache("self._uid", "auth_api_key")
-    def _get_id_from_auth_api_key(self, auth_api_key):
-        auth_api_key_name = self._get_api_key_name(auth_api_key)
-        if auth_api_key_name:
-            # filtered, not search because auth_api_key_name is
-            # not a searchable field
-            return (
-                self.search([])
-                .filtered(lambda r: r.auth_api_key_name == auth_api_key_name)
-                .id
-            )
-        return False
+    @tools.ormcache("self._uid", "auth_api_key_id")
+    def _get_id_from_auth_api_key(self, auth_api_key_id):
+        return self.search([("auth_api_key_id", "=", auth_api_key_id)]).id
 
     @api.model
     def _get_from_http_request(self):
-        auth_api_key = getattr(request, "auth_api_key", None)
-        return self.browse(self._get_id_from_auth_api_key(auth_api_key))
+        auth_api_key_id = getattr(request, "auth_api_key_id", None)
+        return self.browse(self._get_id_from_auth_api_key(auth_api_key_id))
+
+    @api.multi
+    def _bind_langs(self, lang_ids):
+        self.ensure_one()
+        self.env["shopinvader.variant.binding.wizard"].bind_langs(
+            self, lang_ids
+        )
+        self.env["shopinvader.category.binding.wizard"].bind_langs(
+            self, lang_ids
+        )
+
+    @api.multi
+    def _unbind_langs(self, lang_ids):
+        self.ensure_one()
+        self.ensure_one()
+        self.env["shopinvader.variant.unbinding.wizard"].unbind_langs(
+            self, lang_ids
+        )
+        self.env["shopinvader.category.unbinding.wizard"].unbind_langs(
+            self, lang_ids
+        )
+
+    @contextmanager
+    def _keep_binding_sync_with_langs(self):
+        lang_ids_by_record = {}
+        for record in self:
+            lang_ids_by_record[record.id] = record.lang_ids.ids
+        yield
+        for record in self:
+            old_lang_ids = set(lang_ids_by_record[record.id])
+            actual_lang_ids = set(record.lang_ids.ids)
+            if old_lang_ids == actual_lang_ids:
+                continue
+            added_lang_ids = actual_lang_ids - old_lang_ids
+            if added_lang_ids:
+                record._bind_langs(list(added_lang_ids))
+            removed_lang_ids = old_lang_ids - actual_lang_ids
+            if removed_lang_ids:
+                record._unbind_langs(list(removed_lang_ids))
+
+    @api.multi
+    def write(self, values):
+        if "auth_api_key_id" in values:
+            self._get_id_from_auth_api_key.clear_cache(self.env[self._name])
+        with self._keep_binding_sync_with_langs():
+            return super(ShopinvaderBackend, self).write(values)
+
+    # TODO: would be nice to put this `tech_name` logic into server.env.mixin
+    # as we already copied it from search engine backend.
+    @api.model
+    def create(self, vals):
+        # make sure technical names are always there
+        if not vals.get("tech_name"):
+            vals["tech_name"] = self._normalize_name(vals["name"])
+        return super().create(vals)
+
+    @staticmethod
+    def _normalize_name(name):
+        return slugify(name).replace("-", "_")
+
+    @api.onchange("name")
+    def _onchange_name(self):
+        if self.name and not self.tech_name:
+            self.tech_name = self._normalize_name(self.name)

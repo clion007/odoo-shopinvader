@@ -61,12 +61,11 @@ class ShopinvaderPartner(models.Model):
         partner = self.env["res.partner"].browse()
         if not config.is_partner_duplication_allowed():
             domain = self._get_unique_partner_domain(vals)
-            partner = partner.search(domain)
+            partner = partner.search(domain, limit=1)
         if partner:
             # here we check if one of the given value is different than those
             # on partner. If true, we create a child partner to keep the
             # given informations
-            partner = partner[0]
             if not self._is_same_partner_value(partner, vals):
                 self._create_child_partner(partner, vals)
             return partner
@@ -91,13 +90,23 @@ class ShopinvaderPartner(models.Model):
         """ we check if one of the given value is different than values
             of the given partner
         """
-        data = partner._convert_to_write(partner._cache)
-        for key in data:
-            if key not in vals:
+        skip_keys = self._is_same_partner_value_skip_keys(partner)
+        keys_to_check = []
+        for key in vals.keys():
+            if key in skip_keys or key not in partner:
                 continue
+            keys_to_check.append(key)
+            # pylint: disable=pointless-statement
+            partner[key]  # make sure key is cached
+        data = partner._convert_to_write(partner._cache)
+        for key in keys_to_check:
             if data[key] != vals[key]:
                 return False
         return True
+
+    def _is_same_partner_value_skip_keys(self, partner):
+        """Take control of keys to ignore for the match."""
+        return ("backend_id", "partner_email")
 
     @api.model
     def _create_child_partner(self, parent, vals):

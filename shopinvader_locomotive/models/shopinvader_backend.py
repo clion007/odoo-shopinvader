@@ -8,7 +8,8 @@ from odoo import api, fields, models
 class ShopinvaderBackend(models.Model):
     _description = "Locomotive CMS Backend"
     _name = "shopinvader.backend"
-    _inherit = ["shopinvader.backend", "connector.backend"]
+    # do not change this order otherwise MRO will go nuts
+    _inherit = ["connector.backend", "shopinvader.backend"]
     _backend_name = "locomotivecms"
 
     location = fields.Char(
@@ -20,7 +21,8 @@ class ShopinvaderBackend(models.Model):
     )
     password = fields.Text(
         help="Locomotive user API key (see Developers section in "
-        "Locomotive site)"
+        "Locomotive site)",
+        string="Locomotive's Api key",
     )
     handle = fields.Char(
         help="Locomotive site handle (see Developers section in "
@@ -30,8 +32,27 @@ class ShopinvaderBackend(models.Model):
         comodel_name="res.currency", string="Currency"
     )
 
+    @property
+    def _server_env_fields(self):
+        env_fields = super()._server_env_fields
+        env_fields.update({"username": {}, "password": {}, "handle": {}})
+        return env_fields
+
     def synchronize_metadata(self):
+        """
+        Export metadatas managed by Odoo (countries, lang, currencies) to the
+        website.
+
+        :return:
+        """
         return self._export_metafields_store()
+
+    def reset_site_settings(self):
+        """
+        Initialize/reset the locomotive site settings (odoo url and api key)
+        and synchronize metadata
+        """
+        self._export_metafields_store(force=True)
 
     @api.model
     def _scheduler_synchronize_currency(self, domain=None):
@@ -42,9 +63,9 @@ class ShopinvaderBackend(models.Model):
     def synchronize_currency(self):
         return self._export_metafields_store(fields=["currency_ids"])
 
-    def _export_metafields_store(self, fields=None):
+    def _export_metafields_store(self, fields=None, force=False):
         for record in self:
             with record.work_on(record._name) as work:
                 exporter = work.component(usage="record.exporter")
-                exporter.run(fields=fields)
+                exporter.run(fields=fields, force=force)
         return True

@@ -8,7 +8,11 @@ from odoo import api, fields, models
 class ShopinvaderBackend(models.Model):
     _inherit = "shopinvader.backend"
 
-    se_backend_id = fields.Many2one("se.backend", "Search Engine Backend")
+    se_backend_id = fields.Many2one(
+        comodel_name="se.backend",
+        string="Search Engine Backend",
+        help="Search Engine backend configuration to use",
+    )
     index_ids = fields.One2many("se.index", related="se_backend_id.index_ids")
 
     @api.model
@@ -34,7 +38,7 @@ class ShopinvaderBackend(models.Model):
         return True
 
     @api.multi
-    def add_misssing_index(self):
+    def add_missing_index(self):
         self.ensure_one()
         ir_models = self._get_default_models()
         index_obj = self.env["se.index"]
@@ -62,3 +66,7 @@ class ShopinvaderBackend(models.Model):
     @api.multi
     def force_resynchronize_index(self):
         self.mapped("se_backend_id.index_ids").resynchronize_all_bindings()
+
+    @api.multi
+    def export_index_settings(self):
+        self.mapped("se_backend_id.index_ids").export_settings()
