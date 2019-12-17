@@ -6,11 +6,15 @@
     "name": "Shopinvader Guest Mode",
     "summary": """
         Guest mode for Shopinvader""",
-    "version": "10.0.1.0.0",
+    "version": "10.0.1.0.1",
     "license": "AGPL-3",
     "author": "ACSONE SA/NV,Odoo Community Association (OCA)",
     "website": "https://acsone.eu/",
     "depends": ["shopinvader"],
-    "data": ["views/shopinvader_backend.xml", "views/shopinvader_partner.xml"],
+    "data": [
+        "data/ir_cron.xml",
+        "views/shopinvader_backend.xml",
+        "views/shopinvader_partner.xml",
+    ],
     "demo": [],
 }

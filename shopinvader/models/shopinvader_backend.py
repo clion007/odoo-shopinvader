@@ -25,12 +25,6 @@ class ShopinvaderBackend(models.Model):
     nbr_product = fields.Integer(compute="_compute_nbr_content")
     nbr_variant = fields.Integer(compute="_compute_nbr_content")
     nbr_category = fields.Integer(compute="_compute_nbr_content")
-    last_step_id = fields.Many2one(
-        "shopinvader.cart.step",
-        string="Last cart step",
-        required=True,
-        default=lambda s: s._default_last_step_id(),
-    )
     allowed_country_ids = fields.Many2many(
         comodel_name="res.country", string="Allowed Country"
     )
@@ -88,6 +82,24 @@ class ShopinvaderBackend(models.Model):
     website_public_name = fields.Char(
         help="Public name of your backend/website."
     )
+    clear_cart_options = fields.Selection(
+        selection=[
+            ("delete", "Delete"),
+            ("clear", "Clear"),
+            ("cancel", "Cancel"),
+        ],
+        required=True,
+        string="Clear cart",
+        default="clear",
+        help="Action to execute on the cart when the front want to clear the "
+        "current cart:\n"
+        "- Delete: delete the cart (and items);\n"
+        "- Clear: keep the cart but remove items;\n"
+        "- Cancel: The cart is canceled but kept into the database.\n"
+        "It could be useful if you want to keep cart for "
+        "statistics reasons. A new cart is created automatically when the "
+        "customer will add a new item.",
+    )
 
     _sql_constraints = [
         (
@@ -127,15 +139,6 @@ class ShopinvaderBackend(models.Model):
         return self.env["res.company"]._company_default_get(
             "shopinvader.backend"
         )
-
-    @api.model
-    def _default_last_step_id(self):
-        last_step = self.env["shopinvader.cart.step"].browse()
-        try:
-            last_step = self.env.ref("shopinvader.cart_end")
-        except ValueError:
-            pass
-        return last_step
 
     def _to_compute_nbr_content(self):
         """

@@ -29,18 +29,15 @@ class CartService(Component):
     def search(self):
         """Return the cart that have been set in the session or
            search an existing cart for the current partner"""
-        return self._to_json(self._get())
+        if not self.cart_id:
+            return {}
+        # If the cart_id doesn't exist anymore, we don't have to create a new
+        return self._to_json(self._get(create_if_not_found=False))
 
     def update(self, **params):
         cart = self._get()
         response = self._update(cart, params)
-        if response.get("action_confirm_cart"):
-            # TODO improve me, it will be better to block the cart
-            # confirmation if the user have set manually the end step
-            # and the payment method do not support it
-            # the best will be to have a params on the payment method
-            return self._confirm_cart(cart)
-        elif response.get("redirect_to"):
+        if response.get("redirect_to"):
             return response
         else:
             return self._to_json(cart)
@@ -62,8 +59,20 @@ class CartService(Component):
         self._delete_item(cart, params)
         return self._to_json(cart)
 
+    def clear(self):
+        """
+        Clear the current cart (by $session)
+        :return: dict/json
+        """
+        cart = self._get()
+        cart = self._clear_cart(cart)
+        return self._to_json(cart)
+
     # Validator
     def _validator_search(self):
+        return {}
+
+    def _validator_clear(self):
         return {}
 
     def _subvalidator_shipping(self):
@@ -140,6 +149,50 @@ class CartService(Component):
             vals.update(new_values)
             item.write(vals)
         cart.recompute()
+
+    def _do_clear_cart_cancel(self, cart):
+        """
+        Cancel the existing cart.
+        Don't need to create a new one because it'll done automatically
+        when the customer will add a new item.
+        :param cart: sale.order recordset
+        :return: sale.order recordset
+        """
+        cart.action_cancel()
+        return cart.browse()
+
+    def _do_clear_cart_delete(self, cart):
+        """
+        Delete/unlink the given cart
+        :param cart: sale.order recordset
+        :return: sale.order recordset
+        """
+        cart.unlink()
+        return cart.browse()
+
+    def _do_clear_cart_clear(self, cart):
+        """
+        Remove items from given cart.
+        :param cart: sale.order recordset
+        :return: sale.order recordset
+        """
+        cart.write({"order_line": [(5, False, False)]})
+        return cart
+
+    def _clear_cart(self, cart):
+        """
+        Action to clear the cart, depending on the backend configuration.
+        :param cart: sale.order recordset
+        :return: sale.order recordset
+        """
+        clear_option = self.shopinvader_backend.clear_cart_options
+        do_clear = "_do_clear_cart_%s" % clear_option
+        if hasattr(self, do_clear):
+            cart = getattr(self, do_clear)(cart)
+        else:
+            _logger.error("The %s function doesn't exists.", do_clear)
+            raise NotImplementedError(_("Missing feature to clear the cart!"))
+        return cart
 
     def _add_item(self, cart, params):
         existing_item = self._check_existing_cart_item(cart, params)
@@ -229,18 +282,10 @@ class CartService(Component):
         return params
 
     def _update(self, cart, params):
-        action_confirm_cart = False
-        step_in_params = "step" in params
         params = self._prepare_update(cart, params)
-        if step_in_params:
-            if (
-                params.get("current_step_id")
-                == self.shopinvader_backend.last_step_id.id
-            ):
-                action_confirm_cart = True
         if params:
             cart.write_with_onchange(params)
-        return {"action_confirm_cart": action_confirm_cart}
+        return {}
 
     def _get_step_from_code(self, code):
         step = self.env["shopinvader.cart.step"].search([("code", "=", code)])
@@ -251,15 +296,20 @@ class CartService(Component):
 
     def _to_json(self, cart):
         if not cart:
-            return {"data": {}, "store_cache": {"cart": {}}}
+            return {
+                "data": {},
+                "store_cache": {"cart": {}},
+                "set_session": {"cart_id": 0},
+            }
         res = super(CartService, self)._to_json(cart)[0]
+
         return {
             "data": res,
             "set_session": {"cart_id": res["id"]},
             "store_cache": {"cart": res},
         }
 
-    def _get(self):
+    def _get(self, create_if_not_found=True):
         """
 
         :return: sale.order recordset (cart)
@@ -271,14 +321,16 @@ class CartService(Component):
             # an alternative would be to build a domain with the expected
             # criteria on the cart but in this case, each time the _get method
             # would have been called, a new SQL query would have been done
-            cart = self.env["sale.order"].browse(self.cart_id)
+            cart = self.env["sale.order"].browse(self.cart_id).exists()
         if (
             cart.shopinvader_backend_id == self.shopinvader_backend
             and cart.typology == "cart"
             and cart.state == "draft"  # ensure that we only work on draft
         ):
             return cart
-        return self._create_empty_cart()
+        if create_if_not_found:
+            return self._create_empty_cart()
+        return cart
 
     def _create_empty_cart(self):
         vals = self._prepare_cart()
@@ -317,17 +369,6 @@ class CartService(Component):
             if changed_field in onchange_fields:
                 return True
         return False
-
-    def _confirm_cart(self, cart):
-        cart.action_confirm_cart()
-        res = self._to_json(cart)
-        res.update(
-            {
-                "store_cache": {"last_sale": res["data"], "cart": {}},
-                "set_session": {"cart_id": 0},
-            }
-        )
-        return res
 
     def _get_cart_item(self, cart, params, raise_if_not_found=True):
         # We search the line based on the item id and the cart id
